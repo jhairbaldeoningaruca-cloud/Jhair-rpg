@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Jhair RPG</title>
+<link rel="icon" href="data:,">
+<meta name="theme-color" content="#0E0F11">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #0E0F11; color: #F2F0EB; font-family: 'Inter', system-ui, sans-serif; }
+  ::selection { background: #E8472B; color: #0E0F11; }
+  #root { min-height: 100vh; }
+  button { font-family: inherit; }
+  #fallback {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #8A8D93; font-size: 14px; text-align: center; padding: 20px;
+  }
+</style>
+</head>
+<body>
+<div id="root"><div id="fallback">Cargando Jhair RPG…</div></div>
+
+<script>
+  // Si algo falla (CDN bloqueado, error de script, etc.) mostramos el motivo
+  // en pantalla en vez de dejar la pantalla en negro.
+  window.onerror = function (msg, url, line, col, error) {
+    var root = document.getElementById("root");
+    if (root) {
+      root.innerHTML =
+        '<div style="padding:24px;color:#F2F0EB;font-family:sans-serif;font-size:13px;line-height:1.6;max-width:600px;margin:0 auto;">' +
+        '<strong style="color:#E8472B;">Hubo un error al cargar la app:</strong><br><br>' +
+        msg +
+        '<br><br><span style="color:#8A8D93;font-size:12px;">Archivo: ' + (url || "desconocido") + ' · Línea ' + line + '</span>' +
+        '</div>';
+    }
+    return false;
+  };
+</script>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js" crossorigin></script>
+
+<script type="text/babel" data-presets="react" data-type="module">
+const { useState, useEffect, useCallback, useMemo } = React;
+
+// ---------- Config ----------
+const AREAS = [
+  { id: "box", name: "Box", icon: "🥊", color: "#E8472B" },
+  { id: "gym", name: "Gym", icon: "💪", color: "#E8472B" },
+  { id: "estudios", name: "Estudios", icon: "📚", color: "#3D7DE8" },
+  { id: "salud_mental", name: "Salud mental", icon: "🧠", color: "#9B5DE5" },
+  { id: "alimentacion", name: "Alimentación", icon: "🥗", color: "#3DDC97" },
+  { id: "reflexion", name: "Reflexión", icon: "🪞", color: "#9B5DE5" },
+  { id: "lectura", name: "Lectura", icon: "📖", color: "#3D7DE8" },
+  { id: "trabajo", name: "Trabajo", icon: "💼", color: "#E8B23D" },
+  { id: "sueno", name: "Buen sueño", icon: "😴", color: "#3DDC97" },
+];
+
+const todayKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const yesterdayKey = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const XP_PER_CHECK = 15;
+const XP_PER_LEVEL = 150;
+
+const emptyAreaState = () => ({
+  xp: 0,
+  streak: 0,
+  lastCompleted: null,
+  totalChecks: 0,
+});
+
+const defaultState = () => {
+  const areas = {};
+  AREAS.forEach((a) => (areas[a.id] = emptyAreaState()));
+  return { areas, history: {}, createdAt: todayKey() };
+};
+
+// ---------- Persistence (localStorage del navegador) ----------
+const STORAGE_KEY = "jhair-rpg:state-v1";
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Aseguramos que existan todas las áreas aunque el guardado sea viejo
+      const areas = { ...parsed.areas };
+      AREAS.forEach((a) => {
+        if (!areas[a.id]) areas[a.id] = emptyAreaState();
+      });
+      return { ...parsed, areas };
+    }
+  } catch (e) {
+    console.error("No se pudo leer el progreso guardado", e);
+  }
+  return defaultState();
+}
+
+function saveState(state) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.error("No se pudo guardar el progreso", e);
+  }
+}
+
+function useGameState() {
+  const [state, setState] = useState(() => loadState());
+
+  const persist = useCallback((next) => {
+    setState(next);
+    saveState(next);
+  }, []);
+
+  return { state, setState: persist };
+}
+
+// ---------- Derived stats ----------
+function levelFromXp(xp) {
+  const level = Math.floor(xp / XP_PER_LEVEL) + 1;
+  const xpInLevel = xp % XP_PER_LEVEL;
+  const pct = Math.min(100, Math.round((xpInLevel / XP_PER_LEVEL) * 100));
+  return { level, xpInLevel, pct };
+}
+
+function totalXp(state) {
+  return AREAS.reduce((sum, a) => sum + (state.areas[a.id]?.xp || 0), 0);
+}
+
+// ---------- Ring component ----------
+function ProgressRing({ pct, color, size = 64, stroke = 6 }) {
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c - (pct / 100) * c;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#2A2D31" strokeWidth={stroke} />
+      <circle
+        cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+        strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        style={{ transition: "stroke-dashoffset 0.5s ease" }}
+      />
+    </svg>
+  );
+}
+
+// ---------- Area Card ----------
+function AreaCard({ area, areaState, onCheck, checkedToday }) {
+  const { level, pct } = levelFromXp(areaState.xp);
+  const streak = areaState.streak || 0;
+
+  return (
+    <div style={{
+      background: "#17191C", border: "1px solid #232629", borderRadius: 14,
+      padding: "16px 14px", display: "flex", flexDirection: "column", gap: 10,
+      position: "relative", overflow: "hidden",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ position: "relative", width: 64, height: 64, flexShrink: 0 }}>
+          <ProgressRing pct={pct} color={area.color} />
+          <div style={{
+            position: "absolute", top: 0, left: 0, width: 64, height: 64,
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22,
+          }}>
+            {area.icon}
+          </div>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontFamily: "'Oswald', sans-serif", textTransform: "uppercase",
+            letterSpacing: 0.5, fontSize: 14, color: "#F2F0EB", fontWeight: 600,
+          }}>
+            {area.name}
+          </div>
+          <div style={{ fontSize: 12, color: "#8A8D93", marginTop: 2 }}>
+            Nivel {level} · {areaState.xp} XP
+          </div>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 4, marginTop: 4,
+            fontSize: 12, color: streak > 0 ? "#3DDC97" : "#5A5D63", fontWeight: 600,
+          }}>
+            <span>🔥</span>
+            <span>{streak} {streak === 1 ? "día" : "días"} de racha</span>
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={() => onCheck(area.id)}
+        disabled={checkedToday}
+        style={{
+          marginTop: 4, width: "100%", padding: "10px 0", borderRadius: 10, border: "none",
+          fontFamily: "'Oswald', sans-serif", textTransform: "uppercase", letterSpacing: 0.6,
+          fontSize: 12.5, fontWeight: 600, cursor: checkedToday ? "default" : "pointer",
+          background: checkedToday ? "#1E2A24" : area.color,
+          color: checkedToday ? "#3DDC97" : "#0E0F11",
+          transition: "transform 0.15s ease, opacity 0.15s ease",
+        }}
+        onMouseDown={(e) => { if (!checkedToday) e.currentTarget.style.transform = "scale(0.97)"; }}
+        onMouseUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+      >
+        {checkedToday ? "✓ Completado hoy" : "Marcar como hecho"}
+      </button>
+    </div>
+  );
+}
+
+// ---------- Main App ----------
+function JhairRPG() {
+  const { state, setState } = useGameState();
+  const [toast, setToast] = useState(null);
+
+  const today = todayKey();
+  const yesterday = yesterdayKey();
+
+  const checkedTodayMap = useMemo(() => {
+    const map = {};
+    AREAS.forEach((a) => { map[a.id] = state.areas[a.id]?.lastCompleted === today; });
+    return map;
+  }, [state, today]);
+
+  const handleCheck = useCallback((areaId) => {
+    const area = state.areas[areaId] || emptyAreaState();
+    if (area.lastCompleted === today) return;
+
+    const wasYesterday = area.lastCompleted === yesterday;
+    const newStreak = wasYesterday ? (area.streak || 0) + 1 : 1;
+
+    const next = {
+      ...state,
+      areas: {
+        ...state.areas,
+        [areaId]: {
+          xp: area.xp + XP_PER_CHECK,
+          streak: newStreak,
+          lastCompleted: today,
+          totalChecks: (area.totalChecks || 0) + 1,
+        },
+      },
+      history: {
+        ...state.history,
+        [today]: { ...(state.history[today] || {}), [areaId]: true },
+      },
+    };
+
+    setState(next);
+
+    const areaDef = AREAS.find((a) => a.id === areaId);
+    setToast(`+${XP_PER_CHECK} XP · ${areaDef.name}`);
+    setTimeout(() => setToast(null), 1800);
+  }, [state, setState, today, yesterday]);
+
+  const xp = totalXp(state);
+  const { level, pct } = levelFromXp(xp);
+  const doneToday = AREAS.filter((a) => checkedTodayMap[a.id]).length;
+  const bestStreak = Math.max(0, ...AREAS.map((a) => state.areas[a.id]?.streak || 0));
+  const totalStreakDays = AREAS.reduce((sum, a) => sum + (state.areas[a.id]?.streak || 0), 0);
+
+  return (
+    <div style={{ background: "#0E0F11", minHeight: "100vh", color: "#F2F0EB", paddingBottom: 32 }}>
+      {/* Header / ficha de personaje */}
+      <div style={{
+        padding: "28px 20px 22px", borderBottom: "1px solid #1E2124",
+        background: "linear-gradient(180deg, rgba(232,71,43,0.08) 0%, rgba(14,15,17,0) 100%)",
+      }}>
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+          maxWidth: 720, margin: "0 auto",
+        }}>
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: "#8A8D93", marginBottom: 4 }}>
+              Ficha de personaje
+            </div>
+            <div style={{
+              fontFamily: "'Oswald', sans-serif", fontSize: 28, fontWeight: 700,
+              textTransform: "uppercase", letterSpacing: 0.5, lineHeight: 1.05,
+            }}>
+              Jhair
+            </div>
+            <div style={{ fontSize: 13, color: "#8A8D93", marginTop: 4 }}>
+              Nivel {level} · {xp} XP totales
+            </div>
+          </div>
+
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 34, fontWeight: 700, color: "#E8472B", lineHeight: 1 }}>
+              {doneToday}/9
+            </div>
+            <div style={{ fontSize: 11, color: "#8A8D93", marginTop: 2 }}>
+              misiones hoy
+            </div>
+          </div>
+        </div>
+
+        <div style={{ maxWidth: 720, margin: "16px auto 0" }}>
+          <div style={{ height: 8, borderRadius: 999, background: "#1E2124", overflow: "hidden" }}>
+            <div style={{
+              height: "100%", width: `${pct}%`,
+              background: "linear-gradient(90deg, #E8472B, #E8B23D)",
+              borderRadius: 999, transition: "width 0.5s ease",
+            }} />
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#5A5D63", marginTop: 6 }}>
+            <span>Nivel {level}</span>
+            <span>Nivel {level + 1}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Stat summary row */}
+      <div style={{
+        maxWidth: 720, margin: "0 auto", display: "grid",
+        gridTemplateColumns: "repeat(3, 1fr)", gap: 10, padding: "18px 20px 0",
+      }}>
+        {[
+          { label: "Racha más larga", value: `${bestStreak} 🔥` },
+          { label: "Días de racha (suma)", value: `${totalStreakDays}` },
+          { label: "Áreas activas", value: `${AREAS.filter(a => (state.areas[a.id]?.streak || 0) > 0).length}/9` },
+        ].map((s) => (
+          <div key={s.label} style={{
+            background: "#15171A", border: "1px solid #202326", borderRadius: 12,
+            padding: "12px 10px", textAlign: "center",
+          }}>
+            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 18, fontWeight: 600 }}>
+              {s.value}
+            </div>
+            <div style={{ fontSize: 10.5, color: "#8A8D93", marginTop: 2 }}>
+              {s.label}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Areas grid */}
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 20px 0" }}>
+        <div style={{ fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase", color: "#8A8D93", marginBottom: 12 }}>
+          Tus 9 áreas
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+          {AREAS.map((area) => (
+            <AreaCard
+              key={area.id}
+              area={area}
+              areaState={state.areas[area.id] || emptyAreaState()}
+              onCheck={handleCheck}
+              checkedToday={checkedTodayMap[area.id]}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 720, margin: "24px auto 0", padding: "0 20px", fontSize: 11.5, color: "#5A5D63", textAlign: "center" }}>
+        Cada check = +{XP_PER_CHECK} XP. Las rachas se rompen si saltas un día. Tu progreso se guarda en este navegador/dispositivo.
+      </div>
+
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
+          background: "#17191C", border: "1px solid #E8472B", color: "#F2F0EB",
+          padding: "10px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+          fontFamily: "'Oswald', sans-serif", letterSpacing: 0.4,
+          boxShadow: "0 6px 24px rgba(0,0,0,0.4)", zIndex: 50,
+        }}>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const rootEl = document.getElementById("root");
+const root = ReactDOM.createRoot(rootEl);
+root.render(<JhairRPG />);
+</script>
+</body>
+</html>
