@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Jhair RPG</title>
+<title>Misiones Diarias</title>
 <link rel="icon" href="data:,">
 <meta name="theme-color" content="#0E0F11">
 <style>
@@ -21,7 +21,7 @@
 </style>
 </head>
 <body>
-<div id="root"><div id="fallback">Cargando Jhair RPG…</div></div>
+<div id="root"><div id="fallback">Cargando Misiones Diarias…</div></div>
 
 <script>
   window.onerror = function (msg, url, line, col, error) {
@@ -53,7 +53,7 @@ const SUPABASE_URL = "https://iietqmapaljtmuuewxwi.supabase.co";
 const SUPABASE_KEY = "sb_publishable_ccrSFREsM3_5Pe3471fqxQ_d6L_VhS1";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const LOCAL_KEY = "jhair-rpg:codigo-usuario";
+const LOCAL_KEY = "misiones-diarias:codigo-usuario";
 
 // ============================================================
 // HELPERS
@@ -343,7 +343,7 @@ function Login({ onLogin }) {
           fontFamily: "'Oswald', sans-serif", fontSize: 26, fontWeight: 700,
           textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, textAlign: "center",
         }}>
-          Jhair RPG
+          Misiones Diarias
         </div>
         <div style={{ fontSize: 12.5, color: "#8A8D93", textAlign: "center", marginBottom: 24 }}>
           Convierte tu vida en un juego
