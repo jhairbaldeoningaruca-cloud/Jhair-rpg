@@ -237,6 +237,40 @@ const api = {
     });
     if (error) throw error;
   },
+
+  // -------- Solo para el panel de administrador --------
+  async getResumenTodosLosUsuarios() {
+    const { data: usuarios, error: errU } = await sb.from("usuarios").select("id, nombre, codigo, creado_en").order("creado_en");
+    if (errU) throw errU;
+    if (!usuarios || usuarios.length === 0) return [];
+
+    const ids = usuarios.map((u) => u.id);
+
+    const { data: misiones } = await sb.from("misiones").select("usuario_id, xp, racha").eq("activa", true).in("usuario_id", ids);
+    const { data: saldos } = await sb.from("coins_saldo").select("usuario_id, saldo").in("usuario_id", ids);
+    const { data: progresoHoy } = await sb.from("progreso_diario").select("usuario_id, mision_id").eq("fecha", todayStr()).in("usuario_id", ids);
+
+    return usuarios.map((u) => {
+      const misionesUsuario = (misiones || []).filter((m) => m.usuario_id === u.id);
+      const xpTotal = misionesUsuario.reduce((s, m) => s + (m.xp || 0), 0);
+      const { level } = levelFromXp(xpTotal);
+      const bestStreak = misionesUsuario.length > 0 ? Math.max(0, ...misionesUsuario.map((m) => m.racha || 0)) : 0;
+      const saldoRow = (saldos || []).find((s) => s.usuario_id === u.id);
+      const hechasHoy = (progresoHoy || []).filter((p) => p.usuario_id === u.id).length;
+
+      return {
+        id: u.id,
+        nombre: u.nombre,
+        codigo: u.codigo,
+        nivel: level,
+        xpTotal,
+        racha: bestStreak,
+        coins: saldoRow?.saldo || 0,
+        misionesHoy: hechasHoy,
+        totalMisiones: misionesUsuario.length,
+      };
+    });
+  },
 };
 
 // ============================================================
@@ -700,6 +734,117 @@ function MisionCard({ mision, hechaHoy, onCheck }) {
 }
 
 // ============================================================
+// PANEL ADMIN (solo lectura, solo visible para usuarios con es_admin)
+// ============================================================
+function PanelAdmin({ onClose }) {
+  const [usuarios, setUsuarios] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [orden, setOrden] = useState("nivel"); // 'nivel' | 'racha' | 'coins' | 'nombre'
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await api.getResumenTodosLosUsuarios();
+        setUsuarios(data);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setCargando(false);
+      }
+    })();
+  }, []);
+
+  const usuariosOrdenados = useMemo(() => {
+    const copia = [...usuarios];
+    if (orden === "nombre") return copia.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    if (orden === "racha") return copia.sort((a, b) => b.racha - a.racha);
+    if (orden === "coins") return copia.sort((a, b) => b.coins - a.coins);
+    return copia.sort((a, b) => b.xpTotal - a.xpTotal);
+  }, [usuarios, orden]);
+
+  const totalActivosHoy = usuarios.filter((u) => u.misionesHoy > 0).length;
+
+  return (
+    <div style={{ background: "#0E0F11", minHeight: "100vh", color: "#F2F0EB", paddingBottom: 40 }}>
+      <div style={{ padding: "20px 20px 16px", borderBottom: "1px solid #1E2124", maxWidth: 720, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: "#8A8D93" }}>Panel admin</div>
+            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 22, fontWeight: 700, textTransform: "uppercase" }}>Todos los jugadores</div>
+          </div>
+          <button onClick={onClose} style={{ ...styles.secondaryBtn, width: "auto", padding: "8px 16px" }}>← Volver</button>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "16px 20px 0" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 18 }}>
+          <div style={{ background: "#15171A", border: "1px solid #202326", borderRadius: 12, padding: "12px 10px", textAlign: "center" }}>
+            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 20, fontWeight: 600 }}>{usuarios.length}</div>
+            <div style={{ fontSize: 10.5, color: "#8A8D93", marginTop: 2 }}>jugadores totales</div>
+          </div>
+          <div style={{ background: "#15171A", border: "1px solid #202326", borderRadius: 12, padding: "12px 10px", textAlign: "center" }}>
+            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 20, fontWeight: 600, color: "#3DDC97" }}>{totalActivosHoy}</div>
+            <div style={{ fontSize: 10.5, color: "#8A8D93", marginTop: 2 }}>activos hoy</div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+          {[
+            { id: "nivel", label: "Por XP" },
+            { id: "racha", label: "Por racha" },
+            { id: "coins", label: "Por coins" },
+            { id: "nombre", label: "A-Z" },
+          ].map((o) => (
+            <button
+              key={o.id}
+              onClick={() => setOrden(o.id)}
+              style={{
+                flex: 1, padding: "7px 0", borderRadius: 8, border: "none", fontSize: 11.5, cursor: "pointer",
+                background: orden === o.id ? "#E8472B" : "#15171A",
+                color: orden === o.id ? "#0E0F11" : "#8A8D93",
+              }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+
+        {cargando ? (
+          <div style={{ textAlign: "center", color: "#8A8D93", fontSize: 13, padding: 30 }}>Cargando jugadores…</div>
+        ) : usuarios.length === 0 ? (
+          <div style={{ textAlign: "center", color: "#5A5D63", fontSize: 13, padding: 30 }}>Todavía no hay jugadores registrados.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {usuariosOrdenados.map((u) => (
+              <div key={u.id} style={{ background: "#17191C", border: "1px solid #232629", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{u.nombre}</div>
+                  <div style={{ fontSize: 11, color: "#5A5D63", marginTop: 1 }}>
+                    {u.misionesHoy}/{u.totalMisiones || 0} misiones hoy
+                  </div>
+                </div>
+                <div style={{ textAlign: "center", minWidth: 50 }}>
+                  <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 14, fontWeight: 600, color: "#E8472B" }}>Nv {u.nivel}</div>
+                  <div style={{ fontSize: 9.5, color: "#5A5D63" }}>nivel</div>
+                </div>
+                <div style={{ textAlign: "center", minWidth: 50 }}>
+                  <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 14, fontWeight: 600, color: "#3DDC97" }}>{u.racha} 🔥</div>
+                  <div style={{ fontSize: 9.5, color: "#5A5D63" }}>racha</div>
+                </div>
+                <div style={{ textAlign: "center", minWidth: 50 }}>
+                  <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 14, fontWeight: 600, color: "#E8B23D" }}>{u.coins} 🪙</div>
+                  <div style={{ fontSize: 9.5, color: "#5A5D63" }}>coins</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // DASHBOARD principal (post-login)
 // ============================================================
 function Dashboard({ usuario, onLogout }) {
@@ -713,6 +858,7 @@ function Dashboard({ usuario, onLogout }) {
   const [cargando, setCargando] = useState(true);
   const [toast, setToast] = useState(null);
   const [modalAbierto, setModalAbierto] = useState(null); // 'misiones' | 'tienda' | 'ahorro'
+  const [verPanelAdmin, setVerPanelAdmin] = useState(false);
 
   const cargarTodo = useCallback(async () => {
     const [mis, areas, hechas, sal, rec, meta, regs] = await Promise.all([
@@ -764,6 +910,10 @@ function Dashboard({ usuario, onLogout }) {
     return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8D93", fontSize: 14 }}>Cargando tu progreso…</div>;
   }
 
+  if (verPanelAdmin) {
+    return <PanelAdmin onClose={() => setVerPanelAdmin(false)} />;
+  }
+
   const doneToday = hechasHoyIds.length;
   const totalMisiones = misiones.length;
   const xpTotal = misiones.reduce((s, m) => s + (m.xp || 0), 0);
@@ -800,9 +950,16 @@ function Dashboard({ usuario, onLogout }) {
           <button onClick={() => setModalAbierto("tienda")} style={styles.coinsPill}>
             🪙 <strong>{saldo}</strong> Coins
           </button>
-          <button onClick={onLogout} style={{ background: "none", border: "none", color: "#5A5D63", fontSize: 11.5, cursor: "pointer" }}>
-            Salir
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {usuario.es_admin && (
+              <button onClick={() => setVerPanelAdmin(true)} style={{ background: "none", border: "none", color: "#E8B23D", fontSize: 11.5, cursor: "pointer", fontWeight: 600 }}>
+                👑 Panel admin
+              </button>
+            )}
+            <button onClick={onLogout} style={{ background: "none", border: "none", color: "#5A5D63", fontSize: 11.5, cursor: "pointer" }}>
+              Salir
+            </button>
+          </div>
         </div>
       </div>
 
