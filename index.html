@@ -12,7 +12,8 @@
   html, body { background: #0E0F11; color: #F2F0EB; font-family: 'Inter', system-ui, sans-serif; }
   ::selection { background: #E8472B; color: #0E0F11; }
   #root { min-height: 100vh; }
-  button { font-family: inherit; }
+  button, input { font-family: inherit; }
+  input:focus { outline: 2px solid #E8472B; }
   #fallback {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     color: #8A8D93; font-size: 14px; text-align: center; padding: 20px;
@@ -23,8 +24,6 @@
 <div id="root"><div id="fallback">Cargando Jhair RPG…</div></div>
 
 <script>
-  // Si algo falla (CDN bloqueado, error de script, etc.) mostramos el motivo
-  // en pantalla en vez de dejar la pantalla en negro.
   window.onerror = function (msg, url, line, col, error) {
     var root = document.getElementById("root");
     if (root) {
@@ -42,91 +41,43 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js" crossorigin></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
-<script type="text/babel" data-presets="react" data-type="module">
-const { useState, useEffect, useCallback, useMemo } = React;
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
-// ---------- Config ----------
-const AREAS = [
-  { id: "box", name: "Box", icon: "🥊", color: "#E8472B" },
-  { id: "gym", name: "Gym", icon: "💪", color: "#E8472B" },
-  { id: "estudios", name: "Estudios", icon: "📚", color: "#3D7DE8" },
-  { id: "salud_mental", name: "Salud mental", icon: "🧠", color: "#9B5DE5" },
-  { id: "alimentacion", name: "Alimentación", icon: "🥗", color: "#3DDC97" },
-  { id: "reflexion", name: "Reflexión", icon: "🪞", color: "#9B5DE5" },
-  { id: "lectura", name: "Lectura", icon: "📖", color: "#3D7DE8" },
-  { id: "trabajo", name: "Trabajo", icon: "💼", color: "#E8B23D" },
-  { id: "sueno", name: "Buen sueño", icon: "😴", color: "#3DDC97" },
-];
+// ============================================================
+// CONFIG SUPABASE
+// ============================================================
+const SUPABASE_URL = "https://iietqmapaljtmuuewxwi.supabase.co";
+const SUPABASE_KEY = "sb_publishable_ccrSFREsM3_5Pe3471fqxQ_d6L_VhS1";
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const todayKey = () => {
+const LOCAL_KEY = "jhair-rpg:codigo-usuario";
+
+// ============================================================
+// HELPERS
+// ============================================================
+const todayStr = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
-const yesterdayKey = () => {
+const yesterdayStr = () => {
   const d = new Date();
   d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
-const XP_PER_CHECK = 15;
-const XP_PER_LEVEL = 150;
-
-const emptyAreaState = () => ({
-  xp: 0,
-  streak: 0,
-  lastCompleted: null,
-  totalChecks: 0,
-});
-
-const defaultState = () => {
-  const areas = {};
-  AREAS.forEach((a) => (areas[a.id] = emptyAreaState()));
-  return { areas, history: {}, createdAt: todayKey() };
+const monthStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
-// ---------- Persistence (localStorage del navegador) ----------
-const STORAGE_KEY = "jhair-rpg:state-v1";
+const XP_PER_CHECK = 15;
+const XP_PER_LEVEL = 150;
+const COINS_POR_DIA_COMPLETO = 20;
 
-function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      // Aseguramos que existan todas las áreas aunque el guardado sea viejo
-      const areas = { ...parsed.areas };
-      AREAS.forEach((a) => {
-        if (!areas[a.id]) areas[a.id] = emptyAreaState();
-      });
-      return { ...parsed, areas };
-    }
-  } catch (e) {
-    console.error("No se pudo leer el progreso guardado", e);
-  }
-  return defaultState();
-}
-
-function saveState(state) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch (e) {
-    console.error("No se pudo guardar el progreso", e);
-  }
-}
-
-function useGameState() {
-  const [state, setState] = useState(() => loadState());
-
-  const persist = useCallback((next) => {
-    setState(next);
-    saveState(next);
-  }, []);
-
-  return { state, setState: persist };
-}
-
-// ---------- Derived stats ----------
 function levelFromXp(xp) {
   const level = Math.floor(xp / XP_PER_LEVEL) + 1;
   const xpInLevel = xp % XP_PER_LEVEL;
@@ -134,11 +85,561 @@ function levelFromXp(xp) {
   return { level, xpInLevel, pct };
 }
 
-function totalXp(state) {
-  return AREAS.reduce((sum, a) => sum + (state.areas[a.id]?.xp || 0), 0);
+function generarCodigo(nombre) {
+  const limpio = nombre.trim().replace(/\s+/g, "");
+  const sufijo = Math.random().toString(36).substring(2, 5).toUpperCase();
+  return `${limpio}-${sufijo}`;
 }
 
-// ---------- Ring component ----------
+// ============================================================
+// CAPA DE DATOS (todas las llamadas a Supabase)
+// ============================================================
+const api = {
+  async crearUsuario(nombre) {
+    let codigo, intento = 0;
+    while (intento < 5) {
+      codigo = generarCodigo(nombre);
+      const { data: existe } = await sb.from("usuarios").select("id").eq("codigo", codigo);
+      if (!existe || existe.length === 0) break;
+      intento++;
+    }
+    const { data, error } = await sb.from("usuarios").insert({ nombre: nombre.trim(), codigo }).select().single();
+    if (error) throw error;
+    await sb.from("coins_saldo").insert({ usuario_id: data.id, saldo: 0 });
+    return data;
+  },
+
+  async buscarUsuarioPorCodigo(codigo) {
+    const { data, error } = await sb.from("usuarios").select("*").eq("codigo", codigo.trim()).maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+
+  async getAreasSugeridas() {
+    const { data, error } = await sb.from("areas_sugeridas").select("*");
+    if (error) throw error;
+    return data || [];
+  },
+
+  async getMisiones(usuarioId) {
+    const { data, error } = await sb.from("misiones").select("*").eq("usuario_id", usuarioId).eq("activa", true).order("creado_en");
+    if (error) throw error;
+    return data || [];
+  },
+
+  async crearMision(usuarioId, { nombre, icono, color, area_sugerida_id }) {
+    const { data, error } = await sb.from("misiones").insert({
+      usuario_id: usuarioId, nombre, icono, color, area_sugerida_id: area_sugerida_id || null,
+    }).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  async desactivarMision(misionId) {
+    const { error } = await sb.from("misiones").update({ activa: false }).eq("id", misionId);
+    if (error) throw error;
+  },
+
+  async getProgresoHoy(usuarioId) {
+    const { data, error } = await sb.from("progreso_diario").select("mision_id").eq("usuario_id", usuarioId).eq("fecha", todayStr());
+    if (error) throw error;
+    return (data || []).map((r) => r.mision_id);
+  },
+
+  async marcarMisionHecha(usuarioId, mision) {
+    const { error: errProgreso } = await sb.from("progreso_diario").insert({
+      usuario_id: usuarioId, fecha: todayStr(), mision_id: mision.id,
+    });
+    if (errProgreso) throw errProgreso;
+
+    const wasYesterday = mision.ultimo_completado === yesterdayStr();
+    const nuevaRacha = wasYesterday ? (mision.racha || 0) + 1 : 1;
+
+    const { error: errMision } = await sb.from("misiones").update({
+      xp: (mision.xp || 0) + XP_PER_CHECK,
+      racha: nuevaRacha,
+      ultimo_completado: todayStr(),
+      total_completados: (mision.total_completados || 0) + 1,
+    }).eq("id", mision.id);
+    if (errMision) throw errMision;
+
+    return nuevaRacha;
+  },
+
+  async otorgarCoinsPorDiaCompleto(usuarioId) {
+    const { data: saldoRow } = await sb.from("coins_saldo").select("saldo").eq("usuario_id", usuarioId).maybeSingle();
+    const saldoActual = saldoRow?.saldo || 0;
+    await sb.from("coins_saldo").update({ saldo: saldoActual + COINS_POR_DIA_COMPLETO }).eq("usuario_id", usuarioId);
+    await sb.from("coins_movimientos").insert({
+      usuario_id: usuarioId, cantidad: COINS_POR_DIA_COMPLETO, motivo: `Día completo · ${todayStr()}`,
+    });
+  },
+
+  async yaSeOtorgoCoinsHoy(usuarioId) {
+    const { data } = await sb.from("coins_movimientos").select("id").eq("usuario_id", usuarioId).like("motivo", `%${todayStr()}%`);
+    return (data || []).length > 0;
+  },
+
+  async getSaldoCoins(usuarioId) {
+    const { data } = await sb.from("coins_saldo").select("saldo").eq("usuario_id", usuarioId).maybeSingle();
+    return data?.saldo || 0;
+  },
+
+  async getRecompensas(usuarioId) {
+    const { data, error } = await sb.from("recompensas").select("*").eq("usuario_id", usuarioId).eq("activa", true).order("costo_coins");
+    if (error) throw error;
+    return data || [];
+  },
+
+  async crearRecompensa(usuarioId, { nombre, costo_coins, icono }) {
+    const { data, error } = await sb.from("recompensas").insert({
+      usuario_id: usuarioId, nombre, costo_coins, icono: icono || "🎁",
+    }).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  async eliminarRecompensa(recompensaId) {
+    const { error } = await sb.from("recompensas").update({ activa: false }).eq("id", recompensaId);
+    if (error) throw error;
+  },
+
+  async canjearRecompensa(usuarioId, recompensa, saldoActual) {
+    if (saldoActual < recompensa.costo_coins) throw new Error("No tienes suficientes coins");
+    await sb.from("coins_saldo").update({ saldo: saldoActual - recompensa.costo_coins }).eq("usuario_id", usuarioId);
+    await sb.from("coins_movimientos").insert({
+      usuario_id: usuarioId, cantidad: -recompensa.costo_coins, motivo: `Canje: ${recompensa.nombre}`,
+    });
+  },
+
+  async getMetaAhorroMes(usuarioId) {
+    const { data } = await sb.from("ahorro_metas").select("*").eq("usuario_id", usuarioId).eq("mes", monthStr()).maybeSingle();
+    return data;
+  },
+
+  async setMetaAhorroMes(usuarioId, monto) {
+    const { error } = await sb.from("ahorro_metas").upsert({
+      usuario_id: usuarioId, mes: monthStr(), meta_monto: monto,
+    }, { onConflict: "usuario_id,mes" });
+    if (error) throw error;
+  },
+
+  async getAhorroDelMes(usuarioId) {
+    const inicio = `${monthStr()}-01`;
+    const { data, error } = await sb.from("ahorro_registros").select("*").eq("usuario_id", usuarioId).gte("fecha", inicio).order("fecha", { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async registrarAhorro(usuarioId, monto) {
+    const { error } = await sb.from("ahorro_registros").insert({
+      usuario_id: usuarioId, fecha: todayStr(), monto,
+    });
+    if (error) throw error;
+  },
+};
+
+// ============================================================
+// PANTALLA: LOGIN
+// ============================================================
+function Login({ onLogin }) {
+  const [modo, setModo] = useState("entrar"); // 'entrar' | 'crear'
+  const [nombre, setNombre] = useState("");
+  const [codigo, setCodigo] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+  const [codigoCreado, setCodigoCreado] = useState(null);
+
+  const handleCrear = async () => {
+    if (!nombre.trim()) { setError("Escribe tu nombre"); return; }
+    setError(""); setCargando(true);
+    try {
+      const usuario = await api.crearUsuario(nombre);
+      localStorage.setItem(LOCAL_KEY, usuario.codigo);
+      setCodigoCreado(usuario.codigo);
+      setTimeout(() => onLogin(usuario), 2200);
+    } catch (e) {
+      setError("No se pudo crear tu cuenta. Intenta de nuevo.");
+      console.error(e);
+    } finally {
+      setCargando(false);
+    }
+  };
+
+  const handleEntrar = async () => {
+    if (!codigo.trim()) { setError("Escribe tu código"); return; }
+    setError(""); setCargando(true);
+    try {
+      const usuario = await api.buscarUsuarioPorCodigo(codigo);
+      if (!usuario) { setError("No encontramos ese código. Revísalo bien."); return; }
+      localStorage.setItem(LOCAL_KEY, usuario.codigo);
+      onLogin(usuario);
+    } catch (e) {
+      setError("Hubo un problema al conectar. Intenta de nuevo.");
+      console.error(e);
+    } finally {
+      setCargando(false);
+    }
+  };
+
+  if (codigoCreado) {
+    return (
+      <div style={styles.loginWrap}>
+        <div style={{ ...styles.loginCard, textAlign: "center" }}>
+          <div style={{ fontSize: 13, color: "#8A8D93", marginBottom: 8 }}>¡Cuenta creada!</div>
+          <div style={{ fontSize: 12, color: "#8A8D93", marginBottom: 6 }}>Tu código personal es:</div>
+          <div style={{
+            fontFamily: "'Oswald', sans-serif", fontSize: 28, fontWeight: 700,
+            color: "#E8472B", letterSpacing: 1, marginBottom: 10,
+          }}>
+            {codigoCreado}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#5A5D63" }}>
+            Lo guardamos en este dispositivo. Si entras desde otro celular, usa este código para acceder.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.loginWrap}>
+      <div style={styles.loginCard}>
+        <div style={{
+          fontFamily: "'Oswald', sans-serif", fontSize: 26, fontWeight: 700,
+          textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, textAlign: "center",
+        }}>
+          Jhair RPG
+        </div>
+        <div style={{ fontSize: 12.5, color: "#8A8D93", textAlign: "center", marginBottom: 24 }}>
+          Convierte tu vida en un juego
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 18, background: "#15171A", borderRadius: 10, padding: 4 }}>
+          <button
+            onClick={() => { setModo("entrar"); setError(""); }}
+            style={{ ...styles.tabBtn, background: modo === "entrar" ? "#E8472B" : "transparent", color: modo === "entrar" ? "#0E0F11" : "#8A8D93" }}
+          >
+            Ya tengo cuenta
+          </button>
+          <button
+            onClick={() => { setModo("crear"); setError(""); }}
+            style={{ ...styles.tabBtn, background: modo === "crear" ? "#E8472B" : "transparent", color: modo === "crear" ? "#0E0F11" : "#8A8D93" }}
+          >
+            Soy nuevo
+          </button>
+        </div>
+
+        {modo === "entrar" ? (
+          <>
+            <label style={styles.label}>Tu código personal</label>
+            <input
+              style={styles.input}
+              placeholder="Ej: Carlos-4F2"
+              value={codigo}
+              onChange={(e) => setCodigo(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleEntrar()}
+            />
+            {error && <div style={styles.errorText}>{error}</div>}
+            <button style={styles.primaryBtn} onClick={handleEntrar} disabled={cargando}>
+              {cargando ? "Entrando…" : "Entrar"}
+            </button>
+          </>
+        ) : (
+          <>
+            <label style={styles.label}>¿Cómo te llamas?</label>
+            <input
+              style={styles.input}
+              placeholder="Ej: Carlos"
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleCrear()}
+            />
+            {error && <div style={styles.errorText}>{error}</div>}
+            <button style={styles.primaryBtn} onClick={handleCrear} disabled={cargando}>
+              {cargando ? "Creando…" : "Crear mi cuenta"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// MODAL genérico
+// ============================================================
+function Modal({ title, onClose, children }) {
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 16, fontWeight: 600, textTransform: "uppercase" }}>
+            {title}
+          </div>
+          <button onClick={onClose} style={styles.closeBtn}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// MODAL: Elegir / crear misiones
+// ============================================================
+function ModalMisiones({ usuario, areasSugeridas, misionesActuales, onClose, onMisionesActualizadas }) {
+  const [creando, setCreando] = useState(false);
+  const [nombreNueva, setNombreNueva] = useState("");
+  const [iconoNueva, setIconoNueva] = useState("⭐");
+  const [cargando, setCargando] = useState(false);
+
+  const idsActivos = new Set(misionesActuales.map((m) => m.area_sugerida_id).filter(Boolean));
+
+  const agregarDesdeSugerida = async (area) => {
+    setCargando(true);
+    try {
+      await api.crearMision(usuario.id, { nombre: area.nombre, icono: area.icono, color: area.color, area_sugerida_id: area.id });
+      await onMisionesActualizadas();
+    } catch (e) { console.error(e); }
+    setCargando(false);
+  };
+
+  const agregarPersonalizada = async () => {
+    if (!nombreNueva.trim()) return;
+    setCargando(true);
+    try {
+      const colores = ["#E8472B", "#3D7DE8", "#9B5DE5", "#3DDC97", "#E8B23D"];
+      const colorRandom = colores[Math.floor(Math.random() * colores.length)];
+      await api.crearMision(usuario.id, { nombre: nombreNueva, icono: iconoNueva || "⭐", color: colorRandom });
+      setNombreNueva(""); setCreando(false);
+      await onMisionesActualizadas();
+    } catch (e) { console.error(e); }
+    setCargando(false);
+  };
+
+  const quitarMision = async (mision) => {
+    setCargando(true);
+    try {
+      await api.desactivarMision(mision.id);
+      await onMisionesActualizadas();
+    } catch (e) { console.error(e); }
+    setCargando(false);
+  };
+
+  return (
+    <Modal title="Tus misiones" onClose={onClose}>
+      <div style={{ fontSize: 12, color: "#8A8D93", marginBottom: 12 }}>Misiones activas</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+        {misionesActuales.length === 0 && (
+          <div style={{ fontSize: 12.5, color: "#5A5D63" }}>Aún no tienes misiones. Agrega algunas abajo.</div>
+        )}
+        {misionesActuales.map((m) => (
+          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "#15171A", borderRadius: 10, padding: "8px 10px" }}>
+            <span style={{ fontSize: 18 }}>{m.icono}</span>
+            <span style={{ flex: 1, fontSize: 13 }}>{m.nombre}</span>
+            <button onClick={() => quitarMision(m)} style={styles.smallDangerBtn} disabled={cargando}>Quitar</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 12, color: "#8A8D93", marginBottom: 10 }}>Agregar de la lista sugerida</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 20 }}>
+        {areasSugeridas.filter((a) => !idsActivos.has(a.id)).map((area) => (
+          <button key={area.id} onClick={() => agregarDesdeSugerida(area)} disabled={cargando} style={styles.areaPickBtn}>
+            <div style={{ fontSize: 20 }}>{area.icono}</div>
+            <div style={{ fontSize: 10.5, marginTop: 4 }}>{area.nombre}</div>
+          </button>
+        ))}
+        {areasSugeridas.filter((a) => !idsActivos.has(a.id)).length === 0 && (
+          <div style={{ fontSize: 12, color: "#5A5D63", gridColumn: "1 / -1" }}>Ya agregaste todas las sugeridas.</div>
+        )}
+      </div>
+
+      <div style={{ fontSize: 12, color: "#8A8D93", marginBottom: 10 }}>O crea la tuya</div>
+      {!creando ? (
+        <button onClick={() => setCreando(true)} style={styles.secondaryBtn}>+ Misión personalizada</button>
+      ) : (
+        <div style={{ display: "flex", gap: 8 }}>
+          <input style={{ ...styles.input, width: 56, textAlign: "center", flexShrink: 0 }} value={iconoNueva} onChange={(e) => setIconoNueva(e.target.value)} maxLength={2} />
+          <input style={{ ...styles.input, flex: 1 }} placeholder="Nombre de la misión" value={nombreNueva} onChange={(e) => setNombreNueva(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarPersonalizada()} />
+          <button onClick={agregarPersonalizada} disabled={cargando} style={{ ...styles.primaryBtn, width: "auto", padding: "0 16px" }}>Listo</button>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ============================================================
+// MODAL: Tienda de recompensas
+// ============================================================
+function ModalTienda({ usuario, saldo, recompensas, onClose, onActualizar, setToast }) {
+  const [creando, setCreando] = useState(false);
+  const [nombre, setNombre] = useState("");
+  const [costo, setCosto] = useState("");
+  const [icono, setIcono] = useState("🎁");
+  const [cargando, setCargando] = useState(false);
+
+  const crear = async () => {
+    if (!nombre.trim() || !costo || Number(costo) <= 0) return;
+    setCargando(true);
+    try {
+      await api.crearRecompensa(usuario.id, { nombre, costo_coins: Number(costo), icono });
+      setNombre(""); setCosto(""); setCreando(false);
+      await onActualizar();
+    } catch (e) { console.error(e); }
+    setCargando(false);
+  };
+
+  const eliminar = async (r) => {
+    setCargando(true);
+    try {
+      await api.eliminarRecompensa(r.id);
+      await onActualizar();
+    } catch (e) { console.error(e); }
+    setCargando(false);
+  };
+
+  const canjear = async (r) => {
+    if (saldo < r.costo_coins) { setToast("No tienes suficientes Coins"); setTimeout(() => setToast(null), 1800); return; }
+    setCargando(true);
+    try {
+      await api.canjearRecompensa(usuario.id, r, saldo);
+      setToast(`Canjeaste: ${r.nombre} 🎉`);
+      setTimeout(() => setToast(null), 2000);
+      await onActualizar();
+    } catch (e) { console.error(e); }
+    setCargando(false);
+  };
+
+  return (
+    <Modal title="Tienda de recompensas" onClose={onClose}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+        background: "#15171A", borderRadius: 10, padding: "10px 0", marginBottom: 18,
+      }}>
+        <span style={{ fontSize: 18 }}>🪙</span>
+        <span style={{ fontFamily: "'Oswald', sans-serif", fontSize: 18, fontWeight: 700, color: "#E8B23D" }}>{saldo} Coins</span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+        {recompensas.length === 0 && (
+          <div style={{ fontSize: 12.5, color: "#5A5D63" }}>Aún no tienes recompensas. Crea la primera abajo.</div>
+        )}
+        {recompensas.map((r) => (
+          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "#15171A", borderRadius: 10, padding: "10px 12px" }}>
+            <span style={{ fontSize: 20 }}>{r.icono}</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13 }}>{r.nombre}</div>
+              <div style={{ fontSize: 11, color: "#E8B23D" }}>{r.costo_coins} 🪙</div>
+            </div>
+            <button onClick={() => canjear(r)} disabled={cargando || saldo < r.costo_coins} style={{
+              ...styles.smallPrimaryBtn,
+              opacity: saldo < r.costo_coins ? 0.4 : 1,
+            }}>Canjear</button>
+            <button onClick={() => eliminar(r)} disabled={cargando} style={styles.smallDangerBtn}>✕</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 12, color: "#8A8D93", marginBottom: 10 }}>Crear nueva recompensa</div>
+      {!creando ? (
+        <button onClick={() => setCreando(true)} style={styles.secondaryBtn}>+ Nueva recompensa</button>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={{ ...styles.input, width: 56, textAlign: "center", flexShrink: 0 }} value={icono} onChange={(e) => setIcono(e.target.value)} maxLength={2} />
+            <input style={{ ...styles.input, flex: 1 }} placeholder="Ej: 1 dulce, Almuerzo, etc." value={nombre} onChange={(e) => setNombre(e.target.value)} />
+          </div>
+          <input style={styles.input} placeholder="Costo en Coins (ej: 30)" type="number" value={costo} onChange={(e) => setCosto(e.target.value)} />
+          <button onClick={crear} disabled={cargando} style={styles.primaryBtn}>Crear recompensa</button>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ============================================================
+// MODAL: Ahorro
+// ============================================================
+function ModalAhorro({ usuario, meta, registros, onClose, onActualizar }) {
+  const [monto, setMonto] = useState("");
+  const [metaInput, setMetaInput] = useState(meta?.meta_monto || "");
+  const [cargando, setCargando] = useState(false);
+  const [editandoMeta, setEditandoMeta] = useState(!meta);
+
+  const totalMes = registros.reduce((sum, r) => sum + Number(r.monto), 0);
+  const metaMonto = Number(meta?.meta_monto || 0);
+  const pct = metaMonto > 0 ? Math.min(100, Math.round((totalMes / metaMonto) * 100)) : 0;
+
+  const guardarMonto = async () => {
+    if (!monto || Number(monto) <= 0) return;
+    setCargando(true);
+    try {
+      await api.registrarAhorro(usuario.id, Number(monto));
+      setMonto("");
+      await onActualizar();
+    } catch (e) { console.error(e); }
+    setCargando(false);
+  };
+
+  const guardarMeta = async () => {
+    if (!metaInput || Number(metaInput) <= 0) return;
+    setCargando(true);
+    try {
+      await api.setMetaAhorroMes(usuario.id, Number(metaInput));
+      setEditandoMeta(false);
+      await onActualizar();
+    } catch (e) { console.error(e); }
+    setCargando(false);
+  };
+
+  return (
+    <Modal title="Ahorro del mes" onClose={onClose}>
+      {editandoMeta ? (
+        <div style={{ marginBottom: 18 }}>
+          <label style={styles.label}>¿Cuál es tu meta de ahorro este mes? (S/)</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={{ ...styles.input, flex: 1 }} type="number" placeholder="Ej: 300" value={metaInput} onChange={(e) => setMetaInput(e.target.value)} />
+            <button onClick={guardarMeta} disabled={cargando} style={{ ...styles.primaryBtn, width: "auto", padding: "0 16px" }}>Guardar</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#8A8D93", marginBottom: 6 }}>
+            <span>Meta: S/ {metaMonto}</span>
+            <button onClick={() => setEditandoMeta(true)} style={{ background: "none", border: "none", color: "#3D7DE8", fontSize: 11.5, cursor: "pointer" }}>Editar meta</button>
+          </div>
+          <div style={{ height: 10, borderRadius: 999, background: "#1E2124", overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, #3DDC97, #3D7DE8)", borderRadius: 999, transition: "width 0.5s ease" }} />
+          </div>
+          <div style={{ fontSize: 13, marginTop: 8, textAlign: "center" }}>
+            <strong style={{ color: "#3DDC97" }}>S/ {totalMes.toFixed(2)}</strong> de S/ {metaMonto} ({pct}%)
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontSize: 12, color: "#8A8D93", marginBottom: 8 }}>Registrar ahorro de hoy</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <input style={{ ...styles.input, flex: 1 }} type="number" placeholder="Monto en S/" value={monto} onChange={(e) => setMonto(e.target.value)} onKeyDown={(e) => e.key === "Enter" && guardarMonto()} />
+        <button onClick={guardarMonto} disabled={cargando} style={{ ...styles.primaryBtn, width: "auto", padding: "0 16px" }}>Agregar</button>
+      </div>
+
+      <div style={{ fontSize: 12, color: "#8A8D93", marginBottom: 10 }}>Historial del mes</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 180, overflowY: "auto" }}>
+        {registros.length === 0 && <div style={{ fontSize: 12, color: "#5A5D63" }}>Sin registros este mes todavía.</div>}
+        {registros.map((r) => (
+          <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, background: "#15171A", borderRadius: 8, padding: "6px 10px" }}>
+            <span style={{ color: "#8A8D93" }}>{r.fecha}</span>
+            <span style={{ color: "#3DDC97", fontWeight: 600 }}>+S/ {Number(r.monto).toFixed(2)}</span>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+// ---------- Ring ----------
 function ProgressRing({ pct, color, size = 64, stroke = 6 }) {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
@@ -146,51 +647,35 @@ function ProgressRing({ pct, color, size = 64, stroke = 6 }) {
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#2A2D31" strokeWidth={stroke} />
-      <circle
-        cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
         strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
-        transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        style={{ transition: "stroke-dashoffset 0.5s ease" }}
-      />
+        transform={`rotate(-90 ${size / 2} ${size / 2})`} style={{ transition: "stroke-dashoffset 0.5s ease" }} />
     </svg>
   );
 }
 
-// ---------- Area Card ----------
-function AreaCard({ area, areaState, onCheck, checkedToday }) {
-  const { level, pct } = levelFromXp(areaState.xp);
-  const streak = areaState.streak || 0;
+// ---------- Card de misión ----------
+function MisionCard({ mision, hechaHoy, onCheck }) {
+  const { level, pct } = levelFromXp(mision.xp || 0);
+  const streak = mision.racha || 0;
 
   return (
-    <div style={{
-      background: "#17191C", border: "1px solid #232629", borderRadius: 14,
-      padding: "16px 14px", display: "flex", flexDirection: "column", gap: 10,
-      position: "relative", overflow: "hidden",
-    }}>
+    <div style={{ background: "#17191C", border: "1px solid #232629", borderRadius: 14, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <div style={{ position: "relative", width: 64, height: 64, flexShrink: 0 }}>
-          <ProgressRing pct={pct} color={area.color} />
-          <div style={{
-            position: "absolute", top: 0, left: 0, width: 64, height: 64,
-            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22,
-          }}>
-            {area.icon}
+          <ProgressRing pct={pct} color={mision.color} />
+          <div style={{ position: "absolute", top: 0, left: 0, width: 64, height: 64, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>
+            {mision.icono}
           </div>
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            fontFamily: "'Oswald', sans-serif", textTransform: "uppercase",
-            letterSpacing: 0.5, fontSize: 14, color: "#F2F0EB", fontWeight: 600,
-          }}>
-            {area.name}
+          <div style={{ fontFamily: "'Oswald', sans-serif", textTransform: "uppercase", letterSpacing: 0.5, fontSize: 13.5, color: "#F2F0EB", fontWeight: 600 }}>
+            {mision.nombre}
           </div>
-          <div style={{ fontSize: 12, color: "#8A8D93", marginTop: 2 }}>
-            Nivel {level} · {areaState.xp} XP
+          <div style={{ fontSize: 11.5, color: "#8A8D93", marginTop: 2 }}>
+            Nivel {level} · {mision.xp || 0} XP
           </div>
-          <div style={{
-            display: "flex", alignItems: "center", gap: 4, marginTop: 4,
-            fontSize: 12, color: streak > 0 ? "#3DDC97" : "#5A5D63", fontWeight: 600,
-          }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4, fontSize: 11.5, color: streak > 0 ? "#3DDC97" : "#5A5D63", fontWeight: 600 }}>
             <span>🔥</span>
             <span>{streak} {streak === 1 ? "día" : "días"} de racha</span>
           </div>
@@ -198,172 +683,181 @@ function AreaCard({ area, areaState, onCheck, checkedToday }) {
       </div>
 
       <button
-        onClick={() => onCheck(area.id)}
-        disabled={checkedToday}
+        onClick={() => onCheck(mision)}
+        disabled={hechaHoy}
         style={{
           marginTop: 4, width: "100%", padding: "10px 0", borderRadius: 10, border: "none",
           fontFamily: "'Oswald', sans-serif", textTransform: "uppercase", letterSpacing: 0.6,
-          fontSize: 12.5, fontWeight: 600, cursor: checkedToday ? "default" : "pointer",
-          background: checkedToday ? "#1E2A24" : area.color,
-          color: checkedToday ? "#3DDC97" : "#0E0F11",
-          transition: "transform 0.15s ease, opacity 0.15s ease",
+          fontSize: 12, fontWeight: 600, cursor: hechaHoy ? "default" : "pointer",
+          background: hechaHoy ? "#1E2A24" : mision.color,
+          color: hechaHoy ? "#3DDC97" : "#0E0F11",
         }}
-        onMouseDown={(e) => { if (!checkedToday) e.currentTarget.style.transform = "scale(0.97)"; }}
-        onMouseUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
       >
-        {checkedToday ? "✓ Completado hoy" : "Marcar como hecho"}
+        {hechaHoy ? "✓ Completado hoy" : "Marcar como hecho"}
       </button>
     </div>
   );
 }
 
-// ---------- Main App ----------
-function JhairRPG() {
-  const { state, setState } = useGameState();
+// ============================================================
+// DASHBOARD principal (post-login)
+// ============================================================
+function Dashboard({ usuario, onLogout }) {
+  const [misiones, setMisiones] = useState([]);
+  const [areasSugeridas, setAreasSugeridas] = useState([]);
+  const [hechasHoyIds, setHechasHoyIds] = useState([]);
+  const [saldo, setSaldo] = useState(0);
+  const [recompensas, setRecompensas] = useState([]);
+  const [metaAhorro, setMetaAhorro] = useState(null);
+  const [registrosAhorro, setRegistrosAhorro] = useState([]);
+  const [cargando, setCargando] = useState(true);
   const [toast, setToast] = useState(null);
+  const [modalAbierto, setModalAbierto] = useState(null); // 'misiones' | 'tienda' | 'ahorro'
 
-  const today = todayKey();
-  const yesterday = yesterdayKey();
+  const cargarTodo = useCallback(async () => {
+    const [mis, areas, hechas, sal, rec, meta, regs] = await Promise.all([
+      api.getMisiones(usuario.id),
+      api.getAreasSugeridas(),
+      api.getProgresoHoy(usuario.id),
+      api.getSaldoCoins(usuario.id),
+      api.getRecompensas(usuario.id),
+      api.getMetaAhorroMes(usuario.id),
+      api.getAhorroDelMes(usuario.id),
+    ]);
+    setMisiones(mis);
+    setAreasSugeridas(areas);
+    setHechasHoyIds(hechas);
+    setSaldo(sal);
+    setRecompensas(rec);
+    setMetaAhorro(meta);
+    setRegistrosAhorro(regs);
+    setCargando(false);
+  }, [usuario.id]);
 
-  const checkedTodayMap = useMemo(() => {
-    const map = {};
-    AREAS.forEach((a) => { map[a.id] = state.areas[a.id]?.lastCompleted === today; });
-    return map;
-  }, [state, today]);
+  useEffect(() => { cargarTodo(); }, [cargarTodo]);
 
-  const handleCheck = useCallback((areaId) => {
-    const area = state.areas[areaId] || emptyAreaState();
-    if (area.lastCompleted === today) return;
+  const handleCheck = async (mision) => {
+    try {
+      await api.marcarMisionHecha(usuario.id, mision);
+      setToast(`+${XP_PER_CHECK} XP · ${mision.nombre}`);
 
-    const wasYesterday = area.lastCompleted === yesterday;
-    const newStreak = wasYesterday ? (area.streak || 0) + 1 : 1;
+      const nuevasHechas = [...hechasHoyIds, mision.id];
+      setHechasHoyIds(nuevasHechas);
 
-    const next = {
-      ...state,
-      areas: {
-        ...state.areas,
-        [areaId]: {
-          xp: area.xp + XP_PER_CHECK,
-          streak: newStreak,
-          lastCompleted: today,
-          totalChecks: (area.totalChecks || 0) + 1,
-        },
-      },
-      history: {
-        ...state.history,
-        [today]: { ...(state.history[today] || {}), [areaId]: true },
-      },
-    };
+      if (misiones.length > 0 && nuevasHechas.length === misiones.length) {
+        const yaOtorgado = await api.yaSeOtorgoCoinsHoy(usuario.id);
+        if (!yaOtorgado) {
+          await api.otorgarCoinsPorDiaCompleto(usuario.id);
+          setTimeout(() => setToast(`🎉 ¡Día completo! +${COINS_POR_DIA_COMPLETO} Coins`), 600);
+        }
+      }
+      setTimeout(() => setToast(null), 2200);
+      await cargarTodo();
+    } catch (e) {
+      console.error(e);
+      setToast("Hubo un error, intenta de nuevo");
+      setTimeout(() => setToast(null), 1800);
+    }
+  };
 
-    setState(next);
+  if (cargando) {
+    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8D93", fontSize: 14 }}>Cargando tu progreso…</div>;
+  }
 
-    const areaDef = AREAS.find((a) => a.id === areaId);
-    setToast(`+${XP_PER_CHECK} XP · ${areaDef.name}`);
-    setTimeout(() => setToast(null), 1800);
-  }, [state, setState, today, yesterday]);
-
-  const xp = totalXp(state);
-  const { level, pct } = levelFromXp(xp);
-  const doneToday = AREAS.filter((a) => checkedTodayMap[a.id]).length;
-  const bestStreak = Math.max(0, ...AREAS.map((a) => state.areas[a.id]?.streak || 0));
-  const totalStreakDays = AREAS.reduce((sum, a) => sum + (state.areas[a.id]?.streak || 0), 0);
+  const doneToday = hechasHoyIds.length;
+  const totalMisiones = misiones.length;
+  const xpTotal = misiones.reduce((s, m) => s + (m.xp || 0), 0);
+  const { level, pct } = levelFromXp(xpTotal);
+  const bestStreak = Math.max(0, ...misiones.map((m) => m.racha || 0));
 
   return (
-    <div style={{ background: "#0E0F11", minHeight: "100vh", color: "#F2F0EB", paddingBottom: 32 }}>
-      {/* Header / ficha de personaje */}
-      <div style={{
-        padding: "28px 20px 22px", borderBottom: "1px solid #1E2124",
-        background: "linear-gradient(180deg, rgba(232,71,43,0.08) 0%, rgba(14,15,17,0) 100%)",
-      }}>
-        <div style={{
-          display: "flex", justifyContent: "space-between", alignItems: "flex-start",
-          maxWidth: 720, margin: "0 auto",
-        }}>
+    <div style={{ background: "#0E0F11", minHeight: "100vh", color: "#F2F0EB", paddingBottom: 90 }}>
+      {/* Header */}
+      <div style={{ padding: "24px 20px 20px", borderBottom: "1px solid #1E2124", background: "linear-gradient(180deg, rgba(232,71,43,0.08) 0%, rgba(14,15,17,0) 100%)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", maxWidth: 720, margin: "0 auto" }}>
           <div>
-            <div style={{ fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: "#8A8D93", marginBottom: 4 }}>
-              Ficha de personaje
+            <div style={{ fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: "#8A8D93", marginBottom: 4 }}>Ficha de personaje</div>
+            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 26, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, lineHeight: 1.05 }}>
+              {usuario.nombre}
             </div>
-            <div style={{
-              fontFamily: "'Oswald', sans-serif", fontSize: 28, fontWeight: 700,
-              textTransform: "uppercase", letterSpacing: 0.5, lineHeight: 1.05,
-            }}>
-              Jhair
-            </div>
-            <div style={{ fontSize: 13, color: "#8A8D93", marginTop: 4 }}>
-              Nivel {level} · {xp} XP totales
-            </div>
+            <div style={{ fontSize: 12.5, color: "#8A8D93", marginTop: 4 }}>Nivel {level} · {xpTotal} XP totales</div>
           </div>
-
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 34, fontWeight: 700, color: "#E8472B", lineHeight: 1 }}>
-              {doneToday}/9
+            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 30, fontWeight: 700, color: "#E8472B", lineHeight: 1 }}>
+              {doneToday}/{totalMisiones || 0}
             </div>
-            <div style={{ fontSize: 11, color: "#8A8D93", marginTop: 2 }}>
-              misiones hoy
-            </div>
+            <div style={{ fontSize: 10.5, color: "#8A8D93", marginTop: 2 }}>misiones hoy</div>
           </div>
         </div>
 
-        <div style={{ maxWidth: 720, margin: "16px auto 0" }}>
+        <div style={{ maxWidth: 720, margin: "14px auto 0" }}>
           <div style={{ height: 8, borderRadius: 999, background: "#1E2124", overflow: "hidden" }}>
-            <div style={{
-              height: "100%", width: `${pct}%`,
-              background: "linear-gradient(90deg, #E8472B, #E8B23D)",
-              borderRadius: 999, transition: "width 0.5s ease",
-            }} />
+            <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, #E8472B, #E8B23D)", borderRadius: 999, transition: "width 0.5s ease" }} />
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#5A5D63", marginTop: 6 }}>
-            <span>Nivel {level}</span>
-            <span>Nivel {level + 1}</span>
-          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", maxWidth: 720, margin: "14px auto 0" }}>
+          <button onClick={() => setModalAbierto("tienda")} style={styles.coinsPill}>
+            🪙 <strong>{saldo}</strong> Coins
+          </button>
+          <button onClick={onLogout} style={{ background: "none", border: "none", color: "#5A5D63", fontSize: 11.5, cursor: "pointer" }}>
+            Salir
+          </button>
         </div>
       </div>
 
-      {/* Stat summary row */}
-      <div style={{
-        maxWidth: 720, margin: "0 auto", display: "grid",
-        gridTemplateColumns: "repeat(3, 1fr)", gap: 10, padding: "18px 20px 0",
-      }}>
-        {[
-          { label: "Racha más larga", value: `${bestStreak} 🔥` },
-          { label: "Días de racha (suma)", value: `${totalStreakDays}` },
-          { label: "Áreas activas", value: `${AREAS.filter(a => (state.areas[a.id]?.streak || 0) > 0).length}/9` },
-        ].map((s) => (
-          <div key={s.label} style={{
-            background: "#15171A", border: "1px solid #202326", borderRadius: 12,
-            padding: "12px 10px", textAlign: "center",
-          }}>
-            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 18, fontWeight: 600 }}>
-              {s.value}
-            </div>
-            <div style={{ fontSize: 10.5, color: "#8A8D93", marginTop: 2 }}>
-              {s.label}
-            </div>
-          </div>
-        ))}
+      {/* Acciones rápidas */}
+      <div style={{ maxWidth: 720, margin: "0 auto", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, padding: "18px 20px 0" }}>
+        <button onClick={() => setModalAbierto("misiones")} style={styles.quickCard}>
+          <div style={{ fontSize: 18 }}>📋</div>
+          <div style={{ fontSize: 10.5, marginTop: 4 }}>Misiones</div>
+        </button>
+        <button onClick={() => setModalAbierto("tienda")} style={styles.quickCard}>
+          <div style={{ fontSize: 18 }}>🛍️</div>
+          <div style={{ fontSize: 10.5, marginTop: 4 }}>Tienda</div>
+        </button>
+        <button onClick={() => setModalAbierto("ahorro")} style={styles.quickCard}>
+          <div style={{ fontSize: 18 }}>💰</div>
+          <div style={{ fontSize: 10.5, marginTop: 4 }}>Ahorro</div>
+        </button>
       </div>
 
-      {/* Areas grid */}
+      {/* Racha destacada */}
+      <div style={{ maxWidth: 720, margin: "12px auto 0", padding: "0 20px" }}>
+        <div style={{ background: "#15171A", border: "1px solid #202326", borderRadius: 12, padding: "10px 14px", textAlign: "center", fontSize: 12.5, color: "#8A8D93" }}>
+          Racha más larga: <strong style={{ color: "#3DDC97" }}>{bestStreak} 🔥</strong>
+        </div>
+      </div>
+
+      {/* Misiones */}
       <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 20px 0" }}>
         <div style={{ fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase", color: "#8A8D93", marginBottom: 12 }}>
-          Tus 9 áreas
+          Tus misiones
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-          {AREAS.map((area) => (
-            <AreaCard
-              key={area.id}
-              area={area}
-              areaState={state.areas[area.id] || emptyAreaState()}
-              onCheck={handleCheck}
-              checkedToday={checkedTodayMap[area.id]}
-            />
-          ))}
-        </div>
+        {misiones.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "30px 20px", color: "#5A5D63", fontSize: 13 }}>
+            Aún no tienes misiones. <br />
+            <button onClick={() => setModalAbierto("misiones")} style={{ ...styles.secondaryBtn, marginTop: 12, width: "auto", padding: "8px 20px" }}>Agregar misiones</button>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+            {misiones.map((m) => (
+              <MisionCard key={m.id} mision={m} hechaHoy={hechasHoyIds.includes(m.id)} onCheck={handleCheck} />
+            ))}
+          </div>
+        )}
       </div>
 
-      <div style={{ maxWidth: 720, margin: "24px auto 0", padding: "0 20px", fontSize: 11.5, color: "#5A5D63", textAlign: "center" }}>
-        Cada check = +{XP_PER_CHECK} XP. Las rachas se rompen si saltas un día. Tu progreso se guarda en este navegador/dispositivo.
-      </div>
+      {/* Modales */}
+      {modalAbierto === "misiones" && (
+        <ModalMisiones usuario={usuario} areasSugeridas={areasSugeridas} misionesActuales={misiones} onClose={() => setModalAbierto(null)} onMisionesActualizadas={cargarTodo} />
+      )}
+      {modalAbierto === "tienda" && (
+        <ModalTienda usuario={usuario} saldo={saldo} recompensas={recompensas} onClose={() => setModalAbierto(null)} onActualizar={cargarTodo} setToast={setToast} />
+      )}
+      {modalAbierto === "ahorro" && (
+        <ModalAhorro usuario={usuario} meta={metaAhorro} registros={registrosAhorro} onClose={() => setModalAbierto(null)} onActualizar={cargarTodo} />
+      )}
 
       {toast && (
         <div style={{
@@ -371,7 +865,7 @@ function JhairRPG() {
           background: "#17191C", border: "1px solid #E8472B", color: "#F2F0EB",
           padding: "10px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600,
           fontFamily: "'Oswald', sans-serif", letterSpacing: 0.4,
-          boxShadow: "0 6px 24px rgba(0,0,0,0.4)", zIndex: 50,
+          boxShadow: "0 6px 24px rgba(0,0,0,0.4)", zIndex: 80, textAlign: "center", maxWidth: "85%",
         }}>
           {toast}
         </div>
@@ -380,9 +874,67 @@ function JhairRPG() {
   );
 }
 
+// ============================================================
+// ESTILOS COMPARTIDOS
+// ============================================================
+const styles = {
+  loginWrap: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 },
+  loginCard: { width: "100%", maxWidth: 360, background: "#15171A", border: "1px solid #232629", borderRadius: 16, padding: 26 },
+  tabBtn: { flex: 1, padding: "9px 0", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 600, cursor: "pointer" },
+  label: { display: "block", fontSize: 11.5, color: "#8A8D93", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 },
+  input: { width: "100%", padding: "11px 12px", borderRadius: 10, border: "1px solid #2A2D31", background: "#0E0F11", color: "#F2F0EB", fontSize: 14, marginBottom: 4 },
+  primaryBtn: { width: "100%", marginTop: 14, padding: "12px 0", borderRadius: 10, border: "none", background: "#E8472B", color: "#0E0F11", fontFamily: "'Oswald', sans-serif", textTransform: "uppercase", fontSize: 13, fontWeight: 600, cursor: "pointer" },
+  secondaryBtn: { width: "100%", padding: "10px 0", borderRadius: 10, border: "1px dashed #3A3D41", background: "transparent", color: "#8A8D93", fontSize: 12.5, cursor: "pointer" },
+  errorText: { color: "#E8472B", fontSize: 12, marginTop: 6, marginBottom: 2 },
+  modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 100 },
+  modalCard: { width: "100%", maxWidth: 480, maxHeight: "85vh", overflowY: "auto", background: "#17191C", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 22, border: "1px solid #232629" },
+  closeBtn: { background: "#15171A", border: "none", color: "#8A8D93", width: 30, height: 30, borderRadius: "50%", cursor: "pointer", fontSize: 14 },
+  smallDangerBtn: { background: "none", border: "1px solid #3A2A2A", color: "#E8472B", fontSize: 11, padding: "5px 8px", borderRadius: 6, cursor: "pointer" },
+  smallPrimaryBtn: { background: "#3DDC97", border: "none", color: "#0E0F11", fontSize: 11.5, fontWeight: 600, padding: "6px 10px", borderRadius: 6, cursor: "pointer" },
+  areaPickBtn: { background: "#15171A", border: "1px solid #232629", borderRadius: 10, padding: "10px 4px", color: "#F2F0EB", cursor: "pointer", textAlign: "center" },
+  coinsPill: { background: "#15171A", border: "1px solid #E8B23D", color: "#E8B23D", fontSize: 13, fontWeight: 600, padding: "6px 14px", borderRadius: 999, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 },
+  quickCard: { background: "#15171A", border: "1px solid #202326", borderRadius: 12, padding: "12px 6px", textAlign: "center", cursor: "pointer", color: "#F2F0EB" },
+};
+
+// ============================================================
+// APP RAÍZ
+// ============================================================
+function App() {
+  const [usuario, setUsuario] = useState(null);
+  const [verificando, setVerificando] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      const codigoGuardado = localStorage.getItem(LOCAL_KEY);
+      if (codigoGuardado) {
+        try {
+          const u = await api.buscarUsuarioPorCodigo(codigoGuardado);
+          if (u) setUsuario(u);
+        } catch (e) { console.error(e); }
+      }
+      setVerificando(false);
+    })();
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem(LOCAL_KEY);
+    setUsuario(null);
+  };
+
+  if (verificando) {
+    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8D93", fontSize: 14 }}>Cargando…</div>;
+  }
+
+  if (!usuario) {
+    return <Login onLogin={setUsuario} />;
+  }
+
+  return <Dashboard usuario={usuario} onLogout={handleLogout} />;
+}
+
 const rootEl = document.getElementById("root");
 const root = ReactDOM.createRoot(rootEl);
-root.render(<JhairRPG />);
+root.render(<App />);
 </script>
 </body>
 </html>
